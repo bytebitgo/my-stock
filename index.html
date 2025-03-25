@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>实时行情数据</title>
+    <script src="./echarts.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #000;
+            color: #fff;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            /* 防止电视过扫描 */
+            padding: 2vh;
+            box-sizing: border-box;
+        }
+        .container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 20px;
+        }
+        h1 {
+            color: #fff;
+            text-align: center;
+            margin: 20px 0;
+            /* 增大标题字体 */
+            font-size: 48px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+        }
+        .controls {
+            display: flex;
+            justify-content: center;
+            gap: 40px;
+            margin-bottom: 20px;
+            padding: 0 20px;
+        }
+        .control-group {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+        .control-group label {
+            color: #fff;
+            /* 增大标签字体 */
+            font-size: 32px;
+        }
+        select {
+            padding: 15px 30px;
+            /* 增大选择框字体 */
+            font-size: 28px;
+            border-radius: 8px;
+            border: 2px solid #333;
+            background-color: #1a1a1a;
+            color: #fff;
+            /* 增加选择框点击区域 */
+            min-width: 200px;
+        }
+        #chartContainer {
+            flex: 1;
+            width: 100%;
+            min-height: 0;
+            /* 确保图表在大屏上清晰可见 */
+            margin-top: 20px;
+        }
+        .error-message {
+            color: #e74c3c;
+            text-align: center;
+            padding: 15px;
+            margin: 10px 0;
+            background-color: rgba(231, 76, 60, 0.2);
+            border-radius: 8px;
+            display: none;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            /* 增大错误信息字体 */
+            font-size: 32px;
+        }
+        /* 添加焦点样式，方便遥控器操作 */
+        select:focus {
+            outline: 3px solid #4CAF50;
+            box-shadow: 0 0 15px rgba(76, 175, 80, 0.5);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>美国纳斯达克指数 M1</h1>
+        
+        <div id="errorMessage" class="error-message"></div>
+
+        <div class="controls">
+            <div class="control-group">
+                <label for="symbolSelect">指数</label>
+                <select id="symbolSelect">
+                    <option value="">加载中...</option>
+                </select>
+            </div>
+            <div class="control-group">
+                <label for="timeframe">时间周期</label>
+                <select id="timeframe">
+                    <option value="M1">1分钟</option>
+                    <option value="M5">5分钟</option>
+                    <option value="M15">15分钟</option>
+                    <option value="M30">30分钟</option>
+                    <option value="H1">1小时</option>
+                </select>
+            </div>
+        </div>
+
+        <div id="chartContainer"></div>
+    </div>
+
+    <script>
+        let currentToken = null;
+        let myChart = null;
+
+        // 显示错误信息
+        function showError(message) {
+            const errorDiv = document.getElementById('errorMessage');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+            setTimeout(() => {
+                errorDiv.style.display = 'none';
+            }, 5000);
+        }
+
+        // 获取token
+        async function getToken() {
+            try {
+                const response = await fetch('/api/v1/token?client_id=web_client', {
+                    method: 'POST'
+                });
+                if (!response.ok) throw new Error('获取Token失败');
+                const data = await response.json();
+                currentToken = data.access_token;
+                return currentToken;
+            } catch (error) {
+                showError('获取Token失败: ' + error.message);
+                throw error;
+            }
+        }
+
+        // 获取可用交易对
+        async function getSymbols() {
+            try {
+                if (!currentToken) await getToken();
+                
+                const symbols = ['USTECm']; // 目前先使用固定的交易对
+                const symbolSelect = document.getElementById('symbolSelect');
+                symbolSelect.innerHTML = symbols
+                    .map(symbol => `<option value="${symbol}">${symbol}</option>`)
+                    .join('');
+                
+                return symbols;
+            } catch (error) {
+                showError('获取交易对失败: ' + error.message);
+                throw error;
+            }
+        }
+
+        // 获取K线数据
+        async function getKlineData(symbol, timeframe) {
+            try {
+                if (!currentToken) await getToken();
+                
+                const response = await fetch(`/api/v1/kline/${encodeURIComponent(symbol)}/${timeframe}`, {
+                    headers: {
+                        'Authorization': `Bearer ${currentToken}`
+                    }
+                });
+                
+                if (response.status === 401) {
+                    // Token过期，重新获取
+                    await getToken();
+                    return getKlineData(symbol, timeframe);
+                }
+                
+                if (!response.ok) throw new Error('获取K线数据失败');
+                return await response.json();
+            } catch (error) {
+                showError('获取K线数据失败: ' + error.message);
+                return null;
+            }
+        }
+
+        // 初始化图表
+        function initChart() {
+            if (!myChart) {
+                myChart = echarts.init(document.getElementById('chartContainer'));
+            }
+        }
+
+        // 计算MA
+        function calculateMA(data, period) {
+            const result = [];
+            for (let i = 0; i < data.length; i++) {
+                if (i < period - 1) {
+                    result.push('-');
+                    continue;
+                }
+                let sum = 0;
+                for (let j = 0; j < period; j++) {
+                    sum += data[i - j][1]; // 使用收盘价计算
+                }
+                result.push(+(sum / period).toFixed(2));
+            }
+            return result;
+        }
+
+        // 计算MACD
+        function calculateMACD(data, shortPeriod = 12, longPeriod = 26, signalPeriod = 9) {
+            const closePrices = data.map(item => item[2]); // 使用收盘价
+            const shortEMA = [];
+            const longEMA = [];
+            const dif = [];
+            const dea = [];
+            const macd = [];
+
+            // 计算首个EMA值
+            let shortSum = 0;
+            let longSum = 0;
+            for (let i = 0; i < longPeriod; i++) {
+                if (i < shortPeriod) shortSum += closePrices[i];
+                longSum += closePrices[i];
+            }
+            shortEMA[shortPeriod - 1] = shortSum / shortPeriod;
+            longEMA[longPeriod - 1] = longSum / longPeriod;
+
+            // 计算EMA
+            const shortK = 2 / (shortPeriod + 1);
+            const longK = 2 / (longPeriod + 1);
+            const signalK = 2 / (signalPeriod + 1);
+
+            for (let i = shortPeriod; i < closePrices.length; i++) {
+                shortEMA[i] = closePrices[i] * shortK + shortEMA[i-1] * (1 - shortK);
+            }
+            for (let i = longPeriod; i < closePrices.length; i++) {
+                longEMA[i] = closePrices[i] * longK + longEMA[i-1] * (1 - longK);
+                dif[i] = shortEMA[i] - longEMA[i];
+            }
+
+            // 计算DEA和MACD
+            let deaSum = 0;
+            for (let i = longPeriod; i < longPeriod + signalPeriod; i++) {
+                deaSum += dif[i];
+            }
+            dea[longPeriod + signalPeriod - 1] = deaSum / signalPeriod;
+
+            for (let i = longPeriod + signalPeriod; i < closePrices.length; i++) {
+                dea[i] = dif[i] * signalK + dea[i-1] * (1 - signalK);
+                macd[i] = (dif[i] - dea[i]) * 2;
+            }
+
+            return {
+                dif: dif,
+                dea: dea,
+                macd: macd
+            };
+        }
+
+        // 更新K线图
+        function updateChart(data) {
+            if (!data || !data.data) return;
+            
+            const chartData = data.data.map(item => [
+                item.time,
+                item.open,
+                item.close,
+                item.low,
+                item.high,
+                item.volume
+            ]);
+
+            // 计算指标
+            const ma50 = calculateMA(chartData, 50);
+            const ma100 = calculateMA(chartData, 100);
+            const macdData = calculateMACD(chartData);
+
+            // 计算默认显示范围
+            const totalBars = chartData.length;
+            const defaultBars = 100;
+            const startPercent = Math.max(0, ((totalBars - defaultBars) / totalBars) * 100);
+            const endPercent = 100;
+
+            const option = {
+                backgroundColor: '#000',
+                title: {
+                    text: document.getElementById('symbolSelect').value,
+                    left: 'center',
+                    textStyle: {
+                        color: '#fff'
+                    }
+                },
+                legend: {
+                    data: ['K线', 'MA50', 'MA100', 'MACD'],
+                    top: '3%',
+                    textStyle: {
+                        color: '#fff'
+                    }
+                },
+                tooltip: {
+                    trigger: 'axis',
+                    axisPointer: {
+                        type: 'cross'
+                    },
+                    backgroundColor: 'rgba(26, 26, 26, 0.9)',
+                    borderColor: '#333',
+                    textStyle: {
+                        color: '#fff'
+                    }
+                },
+                grid: [{
+                    left: '3%',
+                    right: '3%',
+                    top: '8%',
+                    bottom: '30%',
+                    height: '45%'
+                }, {
+                    left: '3%',
+                    right: '3%',
+                    top: '65%',
+                    height: '15%'
+                }, {
+                    left: '3%',
+                    right: '3%',
+                    top: '82%',
+                    height: '15%'
+                }],
+                xAxis: [{
+                    type: 'category',
+                    data: chartData.map(item => item[0]),
+                    axisLine: { lineStyle: { color: '#333' } },
+                    axisLabel: { color: '#fff' }
+                }, {
+                    type: 'category',
+                    gridIndex: 1,
+                    data: chartData.map(item => item[0]),
+                    axisLine: { lineStyle: { color: '#333' } },
+                    axisLabel: { show: false }
+                }, {
+                    type: 'category',
+                    gridIndex: 2,
+                    data: chartData.map(item => item[0]),
+                    axisLine: { lineStyle: { color: '#333' } },
+                    axisLabel: { show: false }
+                }],
+                yAxis: [{
+                    scale: true,
+                    splitLine: { lineStyle: { color: '#333' } },
+                    axisLine: { lineStyle: { color: '#333' } },
+                    axisLabel: { color: '#fff' }
+                }, {
+                    scale: true,
+                    gridIndex: 1,
+                    splitNumber: 2,
+                    axisLabel: { show: false },
+                    axisLine: { show: false },
+                    axisTick: { show: false },
+                    splitLine: { show: false }
+                }, {
+                    scale: true,
+                    gridIndex: 2,
+                    splitNumber: 2,
+                    axisLabel: { show: true, color: '#fff' },
+                    axisLine: { lineStyle: { color: '#333' } },
+                    axisTick: { show: true },
+                    splitLine: { show: false }
+                }],
+                dataZoom: [{
+                    type: 'inside',
+                    xAxisIndex: [0, 1, 2],
+                    start: startPercent,
+                    end: endPercent
+                }, {
+                    show: true,
+                    xAxisIndex: [0, 1, 2],
+                    type: 'slider',
+                    bottom: '0%',
+                    height: '5%',
+                    borderColor: '#333',
+                    textStyle: {
+                        color: '#fff'
+                    },
+                    fillerColor: 'rgba(26, 26, 26, 0.5)',
+                    handleStyle: {
+                        color: '#333'
+                    },
+                    start: startPercent,
+                    end: endPercent
+                }],
+                series: [{
+                    name: 'K线',
+                    type: 'candlestick',
+                    data: chartData.map(item => [item[1], item[2], item[3], item[4]]),
+                    itemStyle: {
+                        color: '#ef232a',
+                        color0: '#14b143',
+                        borderColor: '#ef232a',
+                        borderColor0: '#14b143'
+                    }
+                }, {
+                    name: 'MA50',
+                    type: 'line',
+                    data: ma50,
+                    smooth: true,
+                    lineStyle: {
+                        opacity: 0.8,
+                        color: '#ffd700'
+                    }
+                }, {
+                    name: 'MA100',
+                    type: 'line',
+                    data: ma100,
+                    smooth: true,
+                    lineStyle: {
+                        opacity: 0.8,
+                        color: '#ff00ff'
+                    }
+                }, {
+                    name: '成交量',
+                    type: 'bar',
+                    xAxisIndex: 1,
+                    yAxisIndex: 1,
+                    data: chartData.map((item, index) => {
+                        const volume = item[5];
+                        const isUp = item[2] >= item[1];
+                        return {
+                            value: volume,
+                            itemStyle: {
+                                color: isUp ? '#14b143' : '#ef232a'
+                            }
+                        };
+                    })
+                }, {
+                    name: 'MACD',
+                    type: 'bar',
+                    xAxisIndex: 2,
+                    yAxisIndex: 2,
+                    data: macdData.macd.map((item, index) => ({
+                        value: item,
+                        itemStyle: {
+                            color: item >= 0 ? '#14b143' : '#ef232a'
+                        }
+                    }))
+                }, {
+                    name: 'DIF',
+                    type: 'line',
+                    xAxisIndex: 2,
+                    yAxisIndex: 2,
+                    data: macdData.dif,
+                    lineStyle: {
+                        opacity: 0.8,
+                        color: '#ffd700'
+                    }
+                }, {
+                    name: 'DEA',
+                    type: 'line',
+                    xAxisIndex: 2,
+                    yAxisIndex: 2,
+                    data: macdData.dea,
+                    lineStyle: {
+                        opacity: 0.8,
+                        color: '#ff00ff'
+                    }
+                }]
+            };
+
+            myChart.setOption(option);
+        }
+
+        // 更新数据
+        async function updateData() {
+            const symbol = document.getElementById('symbolSelect').value;
+            const timeframe = document.getElementById('timeframe').value;
+            
+            if (!symbol) return;
+            
+            const data = await getKlineData(symbol, timeframe);
+            if (data) {
+                updateChart(data);
+            }
+        }
+
+        // 初始化
+        async function init() {
+            try {
+                initChart();
+                await getSymbols();
+                
+                // 设置默认值
+                document.getElementById('symbolSelect').value = 'USTECm';
+                document.getElementById('timeframe').value = 'M1';
+                
+                // 绑定事件
+                document.getElementById('symbolSelect').addEventListener('change', updateData);
+                document.getElementById('timeframe').addEventListener('change', updateData);
+                
+                // 初始更新
+                await updateData();
+                
+                // 定时更新 - 每30秒更新一次
+                setInterval(updateData, 30000);
+
+                // 监听窗口大小变化
+                window.addEventListener('resize', function() {
+                    myChart && myChart.resize();
+                });
+            } catch (error) {
+                console.error('初始化失败:', error);
+            }
+        }
+
+        // 启动应用
+        init();
+    </script>
+</body>
+</html> 
