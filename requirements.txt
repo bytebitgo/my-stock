@@ -1,4 +1,4 @@
-python-for-android==2023.9.4
+python-for-android==2024.1.21
 Kivy==2.2.1
 kivymd==1.1.1
 buildozer==1.5.0 

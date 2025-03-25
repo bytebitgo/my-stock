@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.env
+venv/
+ENV/
+
+# Buildozer
+.buildozer/
+bin/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Android
+*.apk
+*.aab
+*.dex
+*.class
+.gradle/
+local.properties
+proguard/
+*.log
+
+# 项目特定
+*.pyc
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.cache 
+*.bat
+*.exe
+*.ps1
+pyenv.cfg
+activate
